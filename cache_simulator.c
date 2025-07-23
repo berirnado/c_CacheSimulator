@@ -14,17 +14,94 @@ uint32_t big_to_little_endian(uint8_t bytes[4]) {
            (bytes[3]);
 }
 
+//Prints stats in the given outputFormat (0 = Free format, 1 = Standard)
+void printStats(const CacheStats *s, short int outputFormat){
+    switch(outputFormat){
+        case 0:
+            printf("Acessos Totais   : %d\n", s->totalAccessCount);
+            printf("Acertos Totais   : %d\n", s->totalHitCount);
+            printf("Faltas Totais    : %d\n", s->totalMissCount);
+            printf("Faltas Compulsórias : %d\n", s->compulsoryMissCount);
+            printf("Faltas por Conflito : %d\n", s->conflictMissCount);
+            printf("Faltas por Capacidade : %d\n", s->capacityMissCount);
+            if (s->totalAccessCount) {
+                double hit_rate = (double)s->totalHitCount / s->totalAccessCount * 100.0;
+                double miss_rate = 100.0 - hit_rate;
+                printf("Taxa de Acerto %%   : %.2f\n", hit_rate);
+                printf("Taxa de Falha %%    : %.2f\n", miss_rate);
+            }
+            break;
+        case 1:
+            break;
+        default:
+            printf("Invalid output flag %d", outputFormat);
+            exit(1);
+    }
+}
+
 int randomReplacement(int assoc){
     return rand() % (assoc);
 }
 
-void fifoReplacement(uint32_t index, uint32_t tag){
-    
+int fifoReplacement(uint32_t index, uint32_t tag,
+                    int assoc,
+                    bool *cache_val, uint32_t *cache_tag,
+                    uint64_t *fifo_age, uint64_t *lru_age,
+                    uint64_t access_ctr) {
+    int target = 0;                 // Vai armazenar a via (way) que será substituída
+    uint64_t oldest = UINT64_MAX;  // Inicializa com valor máximo para achar o mais antigo
+    int base = index * assoc;      // Base do conjunto (set) no array linear
+
+    // Percorre todas as vias do conjunto para encontrar a mais antiga (FIFO)
+    for (int way = 0; way < assoc; way++) {
+        int pos = base + way;      // Calcula posição linear da via no array
+        if (fifo_age[pos] < oldest) { // Se essa via foi usada há mais tempo
+            oldest = fifo_age[pos];   // Atualiza o valor mais antigo
+            target = way;             // Marca essa via como candidata para substituição
+        }
+    }
+    int pos = base + target;       // Posição da via a ser substituída
+    cache_tag[pos] = tag;          // Atualiza a tag com a nova
+    cache_val[pos] = true;         // Marca essa via como válida (ocupada)
+    fifo_age[pos] = access_ctr;    // Atualiza a "idade" FIFO para o acesso atual
+    lru_age[pos] = access_ctr;     // Também atualiza o contador LRU para consistência
+    return target;                 // Retorna a via substituída
 }
 
-void lruReplacement(uint32_t index, uint32_t tag){
-    
+int lruReplacement(uint32_t index, uint32_t tag,
+                   int assoc,
+                   bool *cache_val, uint32_t *cache_tag,
+                   uint64_t *fifo_age, uint64_t *lru_age,
+                   uint64_t access_ctr) {
+    int target = 0;                // Vai armazenar a via a ser substituída
+    uint64_t oldest = UINT64_MAX; // Valor máximo para encontrar o menos recentemente usado
+    int base = index * assoc;     // Base do conjunto no array linear
+
+    // Percorre todas as vias do conjunto para achar a menos recentemente usada (LRU)
+    for (int way = 0; way < assoc; way++) {
+        int pos = base + way;     // Calcula posição linear da via
+        if (lru_age[pos] < oldest) { // Se essa via foi a que menos recentemente foi usada
+            oldest = lru_age[pos];   // Atualiza o valor mais antigo (menos recente)
+            target = way;            // Marca a via para substituição
+        }
+    }
+    int pos = base + target;       // Posição da via a ser substituída
+    cache_tag[pos] = tag;          // Atualiza a tag da via com a nova
+    cache_val[pos] = true;         // Marca a via como válida (ocupada)
+    fifo_age[pos] = access_ctr;    // Atualiza também o contador FIFO para consistência
+    lru_age[pos] = access_ctr;     // Atualiza o contador LRU com o acesso atual
+    return target;                 // Retorna a via substituída
 }
+
+typedef struct CacheStats {
+    int totalAccessCount;
+    int totalMissCount;
+    int totalHitCount;
+    int compulsoryMissCount;
+    int conflictMissCount;
+    int capacityMissCount;
+} CacheStats;
+
 
 // args: <nsets> <bsize> <assoc> <substituição> <flag_saida> arquivo_de_entrada
 // Exemplo 1  ["256", "4", "1", "R", "1", "bin_100.bin"] 
@@ -69,18 +146,23 @@ int main(int argc, char **argv){
     srand(0);
 
     //Data structure that will store the cache
-    //bool cache_val[n_sets][assoc];
-    //int cache_tag[n_sets][assoc];
-    bool cache_val[n_sets * assoc];
-    int cache_tag[n_sets * assoc];
-    for(int i = 0; i < n_sets * assoc; i++){
-        cache_val[i] = false;
-        cache_tag[i] = -9999999;
-    }
 
-    int randomNumbers[999];
-    for(int i = 0; i < 999; i++){
-        randomNumbers[i] = randomReplacement(8);
+    int nLines = n_sets * assoc;
+
+    //Array that stores validity bits in cache
+    bool cache_val[nLines];
+    //Array that stores tag in cache
+    uint32_t cache_tag[nLines];
+    //Array that stores age for FIFO
+    uint64_t fifo_age[nLines];
+    //Array that stores age for LRU
+    uint64_t lru_age[nLines];
+
+    for(int i = 0; i < nLines; i++){
+        cache_val[i] = false;
+        cache_tag[i] = 0xFFFFFFFFu;
+        fifo_age[i] = 0;
+        lru_age[i] = 0;
     }
 
     int n_bits_offset = log2(b_size);
@@ -88,32 +170,35 @@ int main(int argc, char **argv){
     int n_bits_tag = 32 - n_bits_offset - n_bits_index;
 
     // Counters for benchmark
-    int totalAccessCount = 0;
-    int totalMissCount = 0;
-    int totalHitCount = 0;
-    int compulsoryMissCount = 0;
-    int capacityMissCount = 0;
-    int conflictMissCount = 0;
+    CacheStats stats = {0};
+
+    int access_ctr = 0;
 
     uint8_t buffer[4];  // stores the 4 bytes (word size)
+
+    //Main loop 
     while (fread(buffer, sizeof(uint8_t), 4, filePtr) == 4) {
         uint32_t currentAdd = big_to_little_endian(buffer);
         uint32_t tag = currentAdd >> (n_bits_offset + n_bits_index);
         uint32_t index = (currentAdd >> n_bits_offset) & ((1 << n_bits_index) - 1);
 
-        totalAccessCount++;
+        stats.totalAccessCount++;
 
         bool hit = false;
         int firstAvailableWay = -1;
 
+        //Actual index considering linear array for associativty
+        int base = index * assoc;
+
         for(int way = 0; way < assoc; way++){ // percorre cada via do conjunto]
-            int pos = index * assoc + way;
+            int pos = base + way;
 
             if(cache_val[pos]){ // verifica se a via atual está suja
 
                 if(cache_tag[pos] == tag){
                     hit = true;
-                    totalHitCount++;
+                    stats.totalHitCount++;
+                    lru_age[pos] = stats.totalAccessCount;
                     break;
                 }
 
@@ -123,43 +208,59 @@ int main(int argc, char **argv){
         }
 
         if(!hit){
-            totalMissCount++;
+            stats.totalMissCount++;
 
             //Miss treatment:
             if(assoc == 1){
                 //mapeamento direto apenas substitui a unica via que tem
-                conflictMissCount++;
+                int pos = base;
+                stats.conflictMissCount++;
                 cache_tag[index] = tag;
                 cache_val[index] = true;
+                fifo_age[pos] = stats.totalAccessCount;
+                lru_age[pos] = stats.totalAccessCount;
             }
             else if(firstAvailableWay != -1){ // se existir availableWay nao precisa da politica de substituição
-                int pos = index * assoc + firstAvailableWay;
-                compulsoryMissCount++;
+                int pos = base + firstAvailableWay;
+                stats.compulsoryMissCount++;
                 cache_tag[pos] = tag;
                 cache_val[pos] = true;
+                fifo_age[pos] = stats.totalAccessCount;
+                lru_age[pos] = stats.totalAccessCount;
             }else{
                 //nao existe via disponivel, vamos precisar substituir alguma
-                conflictMissCount++;
+                stats.conflictMissCount++;
                 switch(repPolicy){
                 case 'R':
                     //random
                     int way = randomReplacement(assoc);
-                    int pos = index * assoc + way;
+                    int pos = base + way;
                     cache_tag[pos] = tag;
                     cache_val[pos] = true;
+                    fifo_age[pos] = stats.totalAccessCount;
+                    lru_age[pos] = stats.totalAccessCount;
                     break;
                 case 'L':
                     //LRU
-                    lruReplacement(index, tag);
+                    lruReplacement(index, tag, assoc,
+                                       cache_val, cache_tag, fifo_age, lru_age,
+                                       stats.totalAccessCount);
                     break;
                 case 'F':
                     //FIFO
-                    fifoReplacement(index, tag);
+                    fifoReplacement(index, tag, assoc,
+                                        cache_val, cache_tag, fifo_age, lru_age,
+                                        stats.totalAccessCount);
                     break;
+                default:
+                    fprintf(stderr, "Unknown replacement policy %c\n", repPolicy);
+                    exit(1);
                 }
             }
         }
     }
+
+    printStats(&stats, outputFlag);
 
     return 0;
 }
