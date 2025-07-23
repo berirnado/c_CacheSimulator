@@ -13,6 +13,18 @@ uint32_t big_to_little_endian(uint8_t bytes[4]) {
            (bytes[3]);
 }
 
+void randomReplacement(uint32_t index, uint32_t tag){
+
+}
+
+void fifoReplacement(uint32_t index, uint32_t tag){
+    
+}
+
+void lruReplacement(uint32_t index, uint32_t tag){
+    
+}
+
 // args: <nsets> <bsize> <assoc> <substituição> <flag_saida> arquivo_de_entrada
 // Exemplo 1  ["256", "4", "1", "R", "1", "bin_100.bin"] 
 
@@ -54,6 +66,8 @@ int main(int argc, char **argv){
     }
 
     //Data structure that will store the cache
+    //bool cache_val[n_sets][assoc];
+    //int cache_tag[n_sets][assoc];
     bool cache_val[n_sets * assoc];
     int cache_tag[n_sets * assoc];
 
@@ -75,15 +89,9 @@ int main(int argc, char **argv){
         uint32_t tag = currentAdd >> (n_bits_offset + n_bits_index);
         uint32_t index = (currentAdd >> n_bits_offset) & ((1 << n_bits_index) - 1);
 
-        printf("Add: 0x%08X | tag: 0x%08X | index: %u\n",
-       currentAdd,
-       tag,
-       index);
         //TODO: cache logic
 
         totalAccessCount++;
-
-        //  Direct mapping (devemos mover isso pra uma função talvez)
         //not valid (miss)
         if(cache_val[index] == false){
             totalMissCount++;
@@ -95,15 +103,49 @@ int main(int argc, char **argv){
 
 
         }else{
-            if(cache_tag[index] == tag){
-                totalHitCount++; 
-            }else{
-                //conflito ou capacidade?
-                totalMissCount++;
+            bool hit = false;
+            int firstAvailableWay = -1;
+            for(int way = 0; way < assoc; way++){ // percorre cada via do conjunto
+                if(cache_val[index + way]){ // verifica se a via atual está suja
+                    if(cache_tag[index + way] == tag){
+                        hit = true;
+                        totalHitCount++;
+                        break;
+                    }
+                }else if(firstAvailableWay == -1){ // se nao estiver suja e ainda nao tiver setado nenhuma via disponivel
+                    firstAvailableWay = way; // seta essa via como disponivel para tratar a falta
+                }
+            }
 
-                //Miss treatment (writes tag in index) (sets validity bit to 1)
-                cache_val[index] = true;
-                cache_tag[index] = tag;
+            if(!hit){
+                totalMissCount++;
+                
+                //Miss treatment:
+                if(assoc == 1){
+                    //mapeamento direto apenas substitui a unica via que tem
+                    cache_tag[index] = tag;
+                    cache_val[index] = true;
+                }
+                if(firstAvailableWay != -1){ // se existir availableWay nao precisa da politica de substituição
+                    cache_tag[index + firstAvailableWay] = tag;
+                    cache_val[index + firstAvailableWay] = true;
+                }else{
+                    //nao existe via disponivel, vamos precisar substituir alguma
+                    switch(repPolicy){
+                    case 'R':
+                        //random
+                        randomReplacement(index, tag);
+                        break;
+                    case 'L':
+                        //LRU
+                        lruReplacement(index, tag);
+                        break;
+                    case 'F':
+                        //FIFO
+                        fifoReplacement(index, tag);
+                        break;
+                    }
+                }
             }
         }
     }
