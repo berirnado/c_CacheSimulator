@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <math.h>
+#include <time.h>
 
 // Function that converts big-endian to little-endian
 uint32_t big_to_little_endian(uint8_t bytes[4]) {
@@ -13,8 +14,8 @@ uint32_t big_to_little_endian(uint8_t bytes[4]) {
            (bytes[3]);
 }
 
-void randomReplacement(uint32_t index, uint32_t tag){
-
+int randomReplacement(int assoc){
+    return rand() % (assoc);
 }
 
 void fifoReplacement(uint32_t index, uint32_t tag){
@@ -65,11 +66,22 @@ int main(int argc, char **argv){
         exit(1);
     }
 
+    srand(0);
+
     //Data structure that will store the cache
     //bool cache_val[n_sets][assoc];
     //int cache_tag[n_sets][assoc];
     bool cache_val[n_sets * assoc];
     int cache_tag[n_sets * assoc];
+    for(int i = 0; i < n_sets * assoc; i++){
+        cache_val[i] = false;
+        cache_tag[i] = -9999999;
+    }
+
+    int randomNumbers[999];
+    for(int i = 0; i < 999; i++){
+        randomNumbers[i] = randomReplacement(8);
+    }
 
     int n_bits_offset = log2(b_size);
     int n_bits_index = log2(n_sets);
@@ -89,62 +101,61 @@ int main(int argc, char **argv){
         uint32_t tag = currentAdd >> (n_bits_offset + n_bits_index);
         uint32_t index = (currentAdd >> n_bits_offset) & ((1 << n_bits_index) - 1);
 
-        //TODO: cache logic
-
         totalAccessCount++;
-        //not valid (miss)
-        if(cache_val[index] == false){
-            totalMissCount++;
-            compulsoryMissCount++;
 
-            //Miss treatment (writes tag in index) (sets validity bit to 1)
-            cache_val[index] = true;
-            cache_tag[index] = tag;
+        bool hit = false;
+        int firstAvailableWay = -1;
 
+        for(int way = 0; way < assoc; way++){ // percorre cada via do conjunto]
+            int pos = index * assoc + way;
 
-        }else{
-            bool hit = false;
-            int firstAvailableWay = -1;
-            for(int way = 0; way < assoc; way++){ // percorre cada via do conjunto
-                if(cache_val[index + way]){ // verifica se a via atual está suja
-                    if(cache_tag[index + way] == tag){
-                        hit = true;
-                        totalHitCount++;
-                        break;
-                    }
-                }else if(firstAvailableWay == -1){ // se nao estiver suja e ainda nao tiver setado nenhuma via disponivel
-                    firstAvailableWay = way; // seta essa via como disponivel para tratar a falta
+            if(cache_val[pos]){ // verifica se a via atual está suja
+
+                if(cache_tag[pos] == tag){
+                    hit = true;
+                    totalHitCount++;
+                    break;
                 }
+
+            }else if(firstAvailableWay == -1){ // se nao estiver suja e ainda nao tiver setado nenhuma via disponivel
+                firstAvailableWay = way; // seta essa via como disponivel para tratar a falta
             }
+        }
 
-            if(!hit){
-                totalMissCount++;
-                
-                //Miss treatment:
-                if(assoc == 1){
-                    //mapeamento direto apenas substitui a unica via que tem
-                    cache_tag[index] = tag;
-                    cache_val[index] = true;
-                }
-                if(firstAvailableWay != -1){ // se existir availableWay nao precisa da politica de substituição
-                    cache_tag[index + firstAvailableWay] = tag;
-                    cache_val[index + firstAvailableWay] = true;
-                }else{
-                    //nao existe via disponivel, vamos precisar substituir alguma
-                    switch(repPolicy){
-                    case 'R':
-                        //random
-                        randomReplacement(index, tag);
-                        break;
-                    case 'L':
-                        //LRU
-                        lruReplacement(index, tag);
-                        break;
-                    case 'F':
-                        //FIFO
-                        fifoReplacement(index, tag);
-                        break;
-                    }
+        if(!hit){
+            totalMissCount++;
+
+            //Miss treatment:
+            if(assoc == 1){
+                //mapeamento direto apenas substitui a unica via que tem
+                conflictMissCount++;
+                cache_tag[index] = tag;
+                cache_val[index] = true;
+            }
+            else if(firstAvailableWay != -1){ // se existir availableWay nao precisa da politica de substituição
+                int pos = index * assoc + firstAvailableWay;
+                compulsoryMissCount++;
+                cache_tag[pos] = tag;
+                cache_val[pos] = true;
+            }else{
+                //nao existe via disponivel, vamos precisar substituir alguma
+                conflictMissCount++;
+                switch(repPolicy){
+                case 'R':
+                    //random
+                    int way = randomReplacement(assoc);
+                    int pos = index * assoc + way;
+                    cache_tag[pos] = tag;
+                    cache_val[pos] = true;
+                    break;
+                case 'L':
+                    //LRU
+                    lruReplacement(index, tag);
+                    break;
+                case 'F':
+                    //FIFO
+                    fifoReplacement(index, tag);
+                    break;
                 }
             }
         }
